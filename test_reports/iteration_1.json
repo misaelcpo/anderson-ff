@@ -1,0 +1,71 @@
+{
+  "summary": "Backend testing of SIGNAL.AI (candlestick signal predictor with Gemini 3 Flash). All 9 requested features validated end-to-end via /app/backend/tests/backend_test.py (pytest). 13/13 tests passed with real Gemini 3 Flash calls using a synthetic PNG candlestick chart fixture. The AI correctly read the chart title (par=EUR/USD, timeframe=M5) and returned a valid Signal (PUT/CALL, confidence 55-96, Portuguese analysis) that was persisted, retrievable, updatable via feedback, and reflected in /api/stats winrate.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "/api/analyze",
+        "issue": "Emergent LLM plan enforces concurrent_request_limit=1 (429 CONCURRENCY_REQUEST_LIMIT / occasionally masked as 'Budget has been exceeded'). Parallel Gemini calls fail. Not an app bug, but any future test/worker parallelism against /api/analyze must be serialized. Handled here by grouping all analyze-calling tests into a single class (TestAiFlow) so pytest-xdist loadscope keeps them on one worker."
+      },
+      {
+        "endpoint": "server.py",
+        "issue": "logger is defined AFTER it is referenced (server.py line 171 uses logger.exception in analyze(), but logger is only initialized at line 247). If an LLM exception fires before any request touches the module-level init order... in practice Python resolves it at call-time so it works, but the ordering is fragile. Move logging.basicConfig + logger = getLogger(__name__) to the top of the file."
+      },
+      {
+        "endpoint": "server.py",
+        "issue": "@app.on_event('shutdown') is deprecated in modern FastAPI; recommend lifespan handler."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/backend/tests/generate_chart.py",
+    "/app/test_reports/pytest/pytest_results.xml",
+    "/app/test_fixtures/candlestick_chart.png"
+  ],
+  "action_items": [
+    "(Low priority) Move logging.basicConfig + logger = logging.getLogger(__name__) to the top of /app/backend/server.py so logger.exception() inside /api/analyze error handler is always defined at import time (currently defined below the route).",
+    "(Low priority) Replace deprecated @app.on_event('shutdown') with a FastAPI lifespan context manager.",
+    "(Info) The Emergent LLM key plan currently limits concurrency to 1; anything (frontend, workers, tests) firing parallel /api/analyze calls will 429/502. Consider serializing on the frontend or catching 502 with a friendly PT-BR message.",
+    "(Info) analyze() returns 502 (not 429) when Gemini rate-limits or errors. Consider mapping 429 -> 429 for better client retry UX."
+  ],
+  "critical_code_review_comments": [
+    "server.py: logger referenced before initialization (line ~171 vs ~247). Works today by chance, should be reordered.",
+    "server.py: EMERGENT_LLM_KEY check is only inside /api/analyze; fine, but 500 message could be 503 (service unavailable).",
+    "server.py: analyze() has NO retry/backoff on transient Gemini failures (network/rate limits). Consider 1 retry with jitter for prod UX.",
+    "server.py: Signal model does not enforce created_at as UTC-aware ISO on read (docs stored as string). OK for MVP but harder to sort correctly across TZs; consider storing as datetime.",
+    "server.py: File is under the 700-line limit (~250 lines) - OK.",
+    "server.py: No pagination on GET /api/signals (hardcoded to_list(50)). OK for MVP but note for later.",
+    "server.py: _extract_json is defensive and handles fenced/plain/embedded JSON - good.",
+    "server.py: Confidence clamping to [55, 96] silently overrides model output - documented in prompt so acceptable.",
+    "server.py: No authentication - matches problem statement (Sem autenticação)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/backend_test.py (created)",
+    "/app/backend/tests/generate_chart.py (created - candlestick fixture generator)",
+    "/app/backend/tests/__init__.py (created)",
+    "/app/test_fixtures/candlestick_chart.png (created - real synthetic candlestick chart with EUR/USD M5 title)"
+  ],
+  "success_rate": {
+    "backend": "100%",
+    "frontend": "N/A (backend-only testing requested)"
+  },
+  "test_credentials": "N/A - no auth in this app",
+  "seed_data_creation": "Created /app/test_fixtures/candlestick_chart.png (6.5KB PNG). During tests, ~10 signals were inserted in the DB with 3 WIN + 2 RED feedbacks. Winrate correctly computed as 60%. No cleanup performed (spec asks for persistent history/learning).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend test suite lives in /app/backend/tests/backend_test.py. Run: `REACT_APP_BACKEND_URL=<url> pytest backend/tests/backend_test.py -v`. All AI-hitting tests are consolidated in TestAiFlow class so pytest-xdist loadscope keeps them on one worker (Emergent LLM plan = concurrency 1). Fixture: /app/test_fixtures/candlestick_chart.png (regenerate via /app/backend/tests/generate_chart.py). Gemini 3 Flash was verified to correctly read the chart title 'EUR/USD M5' and return sensible CALL signals for the uptrend bias in the fixture.",
+  "verified_integrations": [
+    {
+      "name": "Gemini 3 Flash via emergentintegrations (universal_key=EMERGENT_LLM_KEY)",
+      "endpoint": "POST /api/analyze",
+      "status": "verified",
+      "evidence": "Real image sent, response par=EUR/USD tf=M5 signal=CALL confidence=85 with Portuguese analysis text; persisted to /api/signals; JSON schema fully validated."
+    }
+  ]
+}
